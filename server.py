@@ -163,7 +163,7 @@ def normalize_path(path):
 def start_server(root):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((ADDRESS, PORT))
-    server.listen(1)
+    server.listen(10)
     print(f"Server listening on port {PORT} :3")
 
     try:
@@ -176,6 +176,8 @@ def start_server(root):
                 print(f"Error receiving request: {e}")
                 client.close()
                 continue
+
+            time.sleep(1)
 
             try:
                 method, path, protocol = client_request.split("\r\n")[0].split(" ")
