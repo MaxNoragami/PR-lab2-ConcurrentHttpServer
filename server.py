@@ -4,6 +4,7 @@ import mimetypes
 import time
 import urllib.parse
 import argparse
+import threading
 
 ADDRESS = "0.0.0.0"
 PORT = 1337
@@ -160,6 +161,62 @@ def normalize_path(path):
     return '/' + '/'.join(normalized_segments)
 
 
+def handle_client_req(client, addr, root):
+    try:
+        client_request = client.recv(4096).decode(errors='ignore')
+
+        time.sleep(1)
+
+        method, path, protocol = client_request.split("\r\n")[0].split(" ")
+        path = urllib.parse.unquote(path)
+
+        if path == "/favicon.ico":
+            return
+
+        print(f"Request: {method} {path} {protocol} from {addr}")
+        print(f"Serving {path} to {addr}")
+
+        original_path = path
+        normalized_path = normalize_path(path)
+
+        if original_path != normalized_path:
+            respond_301(client, f"{normalized_path}")
+            return
+
+        path = normalized_path
+        actual_path = os.path.realpath(os.path.join(root, path.lstrip("/")))
+
+        if not os.path.exists(actual_path):
+            respond_404(client)
+            return
+
+        if os.path.isdir(actual_path):
+            content_type = "text/html"
+            data = display_dir(actual_path, path)
+        else:
+            if not path.endswith(tuple(f".{ext}" for ext in VALID_EXTENSIONS)):
+                respond_404(client)
+                return
+
+            content_type, _ = mimetypes.guess_type(actual_path)
+            with open(actual_path, "rb") as requested_file:
+                data = requested_file.read()
+
+        respond(client,
+                "200 OK",
+                {"Content-Type": content_type, "Connection": "close"},
+                data)
+
+    except (ConnectionResetError, socket.error) as e:
+        print(f"Error receiving request: {e}")
+        return
+    except ValueError:
+        respond_400(client)
+        return
+    finally:
+        client.close()
+
+
 def start_server(root):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((ADDRESS, PORT))
@@ -170,65 +227,13 @@ def start_server(root):
         while True:
             client, addr = server.accept()
 
-            try:
-                client_request = client.recv(4096).decode(errors='ignore')
-            except (ConnectionResetError, socket.error) as e:
-                print(f"Error receiving request: {e}")
-                client.close()
-                continue
+            client_thread = threading.Thread(
+                target=handle_client_req,
+                args=(client, addr, root),
+                daemon=True
+            )
+            client_thread.start()
 
-            time.sleep(1)
-
-            try:
-                method, path, protocol = client_request.split("\r\n")[0].split(" ")
-                path = urllib.parse.unquote(path)
-            except ValueError:
-                respond_400(client)
-                client.close()
-                continue
-
-            if path == "/favicon.ico":
-                client.close()
-                continue
-
-            print(f"Request: {method} {path} {protocol} from {addr}")
-            print(f"Serving {path} to {addr}")
-
-            original_path = path
-            normalized_path = normalize_path(path)
-
-            if original_path != normalized_path:
-                respond_301(client, f"{normalized_path}")
-                client.close()
-                continue
-
-            path = normalized_path
-            actual_path = os.path.realpath(os.path.join(root, path.lstrip("/")))
-
-            if not os.path.exists(actual_path):
-                respond_404(client)
-                client.close()
-                continue
-
-            if os.path.isdir(actual_path):
-                content_type = "text/html"
-                data = display_dir(actual_path, path)
-            else:
-                if not path.endswith(tuple(f".{ext}" for ext in VALID_EXTENSIONS)):
-                    respond_404(client)
-                    client.close()
-                    continue
-
-                content_type, _ = mimetypes.guess_type(actual_path)
-                with open(actual_path, "rb") as requested_file:
-                    data = requested_file.read()
-
-            respond(client,
-                    "200 OK",
-                    {"Content-Type": content_type, "Connection": "close"},
-                    data)
-
-            client.close()
     except KeyboardInterrupt:
         print("Shutting down server, nya~")
     finally:
