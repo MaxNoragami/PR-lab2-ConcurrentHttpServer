@@ -12,3 +12,8 @@ Server listen(10)
 Server thread per request
 --------------------------
 <img src="https://files.catbox.moe/lai7gg.png" alt="Requests to server after implementing thread per request" />
+
+Requests to increment hits, naive approach
+-----------------------------------
+<img src="https://files.catbox.moe/i9f1ix.png" alt="Requests, hits increment, naive, terminal" />
+<img src="https://files.catbox.moe/oplxen.png" alt="Requests, hits increment, naive, browser" />

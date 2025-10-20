@@ -10,6 +10,8 @@ ADDRESS = "0.0.0.0"
 PORT = 1337
 VALID_EXTENSIONS = ["png", "pdf", "html"]
 
+HITS = {}
+
 
 def get_skeleton_view():
     return r"""
@@ -37,6 +39,7 @@ ZZZzz /,`.-'`'    -.  ;-;;,_
             <th>Name</th>
             <th>Last Modified</th>
             <th>Size</th>
+            <th>Hits</th>
         </tr>    
         {items}
         </table>
@@ -126,27 +129,30 @@ def display_dir(actual_path, request_path):
     content = sorted(os.listdir(actual_path))
     filtered_content = []
     if request_path != '/':
-        filtered_content.append(("⬆️", "../", "", ""))
+        filtered_content.append(("⬆️", "../", "", "", ""))
 
     for item in content:
         item_path = os.path.join(actual_path, item)
         modified_time = format_modified_time(os.path.getmtime(item_path))
+
+        hits = HITS.get(request_path.rstrip('/') + '/' + item, 0)
+
         if os.path.isdir(item_path):
-            filtered_content.append(("📁", item + "/", modified_time, "-"))
+            filtered_content.append(("📁", item + "/", modified_time, "-", str(hits)))
         elif item.endswith(tuple(f".{ext}" for ext in VALID_EXTENSIONS)):
             file_type = ("📄" if item.endswith('.pdf') else
                          "🖼️" if item.endswith('.png') else
                          "🌐" if item.endswith('.html') else
                          "❓")
             size = format_size(os.path.getsize(item_path))
-            filtered_content.append((file_type, item, modified_time, size))
+            filtered_content.append((file_type, item, modified_time, size, str(hits)))
 
     view = get_skeleton_view()
     if not request_path.endswith('/'):
         request_path += '/'
     return view.format(path=request_path, items="".join(
-        f"<tr><td>{file_type}</td><td><a href='{request_path}{name.rstrip('/')}'>{name}</a></td><td>{modified}</td><td>{size}</td></tr>"
-        for file_type, name, modified, size in filtered_content))
+        f"<tr><td>{file_type}</td><td><a href='{request_path}{name.rstrip('/')}'>{name}</a></td><td>{modified}</td><td>{size}</td><td>{hits}</td></tr>"
+        for file_type, name, modified, size, hits in filtered_content))
 
 
 def normalize_path(path):
@@ -159,6 +165,12 @@ def normalize_path(path):
         normalized_segments.append(segment)
 
     return '/' + '/'.join(normalized_segments)
+
+
+def increment_hits(path):
+    current_hits = HITS.get(path, 0)
+    time.sleep(0.01)
+    HITS[path] = current_hits + 1
 
 
 def handle_client_req(client, addr, root):
@@ -190,6 +202,8 @@ def handle_client_req(client, addr, root):
             respond_404(client)
             return
 
+        increment_hits(path)
+
         if os.path.isdir(actual_path):
             content_type = "text/html"
             data = display_dir(actual_path, path)
@@ -209,10 +223,8 @@ def handle_client_req(client, addr, root):
 
     except (ConnectionResetError, socket.error) as e:
         print(f"Error receiving request: {e}")
-        return
     except ValueError:
         respond_400(client)
-        return
     finally:
         client.close()
 
