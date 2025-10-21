@@ -11,6 +11,7 @@ PORT = 1337
 VALID_EXTENSIONS = ["png", "pdf", "html"]
 
 HITS = {}
+HITS_LOCK = threading.Lock()
 
 
 def get_skeleton_view():
@@ -168,9 +169,10 @@ def normalize_path(path):
 
 
 def increment_hits(path):
-    current_hits = HITS.get(path, 0)
-    time.sleep(0.01)
-    HITS[path] = current_hits + 1
+    with HITS_LOCK:
+        current_hits = HITS.get(path, 0)
+        time.sleep(0.1)
+        HITS[path] = current_hits + 1
 
 
 def handle_client_req(client, addr, root):
