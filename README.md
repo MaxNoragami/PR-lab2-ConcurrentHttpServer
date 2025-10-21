@@ -17,7 +17,7 @@ Therefore, a concurrent program may or may not run in parallel, and a parallel c
 
 ## Project Structure
 
-Around same structure as Lab 1, with the client being replaced by scripts for testing concurrency and rate limiting:
+Around the same structure as Lab 1, with the client being replaced by scripts for testing concurrency and rate limiting:
 
 ```
 PR-lab2-ConcurrentHttpServer/
@@ -130,7 +130,7 @@ Even when increasing simulated processing time to 0.1 seconds, all increments we
 
 ## Requests over the Network via Docker
 
-The requester (client) container sent concurrent requests to the server container running on another machine via Docker network bridge.
+Using the requester to send concurrent requests via Docker, running on one machine, to the server running on another machine via Docker as well.
 
 <img src="content/over_docker.jpg" alt="Requests over the network from my pc, using my requester via docker to server running via docker on another pc" />
 
