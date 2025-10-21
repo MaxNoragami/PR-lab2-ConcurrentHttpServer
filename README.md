@@ -1,10 +1,10 @@
 # Concurrent HTTP Server =(^.^)=
 
-## Introduction
+## Overview
 
-Hello World! =(^.^)=  
 This lab builds upon **Lab 1’s HTTP Server**, extending it with **concurrency** and **thread-safety**.  
-The goal was to make the server handle multiple connections **concurrently** instead of sequentially — allowing multiple clients to interact with the server at the same time.  
+
+The goal was to make the server handle multiple connections **concurrently** instead of sequentially.  
 
 Two main concepts guided this lab:
 - **Concurrency** (high-level / PLT definition): structuring a program as *independent parts* that can be executed without assuming sequential ordering.
@@ -17,11 +17,11 @@ Therefore, a concurrent program may or may not run in parallel, and a parallel c
 
 ## Project Structure
 
-Same structure as Lab 1, with two additional scripts for testing concurrency and rate limiting:
+Around same structure as Lab 1, with the client being replaced by scripts for testing concurrency and rate limiting:
 
 ```
 PR-lab2-ConcurrentHttpServer/
-├── server.py             # Multithreaded HTTP server
+├── server.py             # Concurrent HTTP server
 ├── requester.py          # Script that makes concurrent requests for testing
 ├── Dockerfile.server     # Docker image for the concurrent server
 ├── Dockerfile.requester  # Docker image for the requester
@@ -53,7 +53,7 @@ python server.py -d [SERVE_DIRECTORY]
 
 ---
 
-## Client (Requester) Usage
+## Requester Usage
 
 ```bash
 # Ensure docker-compose is running
@@ -68,12 +68,11 @@ Where:
 - `-p` = port  
 - `-u` = URL  
 - `-r` = number of requests  
-- `-t` = artificial delay (simulates processing time per request)
+- `-t` = duration / time based on which we spread the requests evenly
 
 ---
 
-## Experiment 1 — Listening Queue Depth
-
+## Request server from lab1
 ### Server listen(1)
 
 The server’s backlog (listen queue) was set to `1`, meaning only one pending connection could wait while another was being handled.
@@ -90,93 +89,86 @@ By increasing the backlog to `10`, multiple connections were queued and processe
 
 <img src="https://files.catbox.moe/waorkd.png" alt="Requests to server after changing to listen(10)" />
 
-However, requests still executed **one after another** — no true concurrency yet.
+However, requests still executed **one after another** — no true concurrency yet. Therefore the `Overall` throughput is quite low.
 
 ---
 
-## Experiment 2 — Thread per Request
+## Request new concurrent server
 
 After implementing a **thread-per-request** model, the server spawned a new thread for every client connection.
 
-```python
-# simplified example
-client_thread = threading.Thread(target=handle_client, args=(conn, addr))
-client_thread.start()
-```
-
-Now, multiple connections could be served **concurrently**, significantly reducing total handling time.
+Now, multiple connections could be served **concurrently**, significantly improving the throughput.
 
 <img src="https://files.catbox.moe/lai7gg.png" alt="Requests to server after implementing thread per request" />
 
-Each request handler simulated a 1-second workload.  
-With 10 concurrent requests, total handling time dropped from ~10s (sequential) to just above ~1s (concurrent).
 
 ---
 
-## Experiment 3 — Counter Feature (Naive)
+## Counter Feature (Naive)
 
-A global counter was introduced to count how many times each file was requested.  
+Counter was introduced to count how many times each file/folder was requested.  
 Initially, it was implemented **without synchronization**, like this:
 
-```python
-file_hits[path] = file_hits.get(path, 0) + 1
-```
-
-### Results
-
-Due to **race conditions**, the hit counts became inconsistent — different threads overwrote each other’s increments.
 
 <img src="https://files.catbox.moe/i9f1ix.png" alt="Requests, hits increment, naive, terminal" />
 <img src="https://files.catbox.moe/oplxen.png" alt="Requests, hits increment, naive, browser" />
 
+Due to **race conditions**, the hit counts became inconsistent — different threads overwrote each other’s increments.
+
 ---
 
-## Experiment 4 — Counter Feature (Thread-Safe)
+## Counter Feature (Thread-Safe)
 
 To fix the race condition, a **threading.Lock** was used around the counter update:
-
-```python
-with counter_lock:
-    file_hits[path] = file_hits.get(path, 0) + 1
-```
-
-### Results
-
-Even when increasing simulated processing time to 0.1 seconds, all increments were handled correctly and deterministically.
 
 <img src="https://files.catbox.moe/jemeek.png" alt="Requests, hits increment, thread-safe, terminal" />
 <img src="https://files.catbox.moe/5zt6cw.png" alt="Requests, hits increment, thread-safe, browser" />
 
+Even when increasing simulated processing time to 0.1 seconds, all increments were handled correctly and deterministically.
+
 ---
 
-## Experiment 5 — Requests over the Network
-
-### Requests via Docker Network
+## Requests over the Network via Docker
 
 The requester (client) container sent concurrent requests to the server container running on another machine via Docker network bridge.
 
 <img src="content/over_docker.jpg" alt="Requests over the network from my pc, using my requester via docker to server running via docker on another pc" />
 
+By staying within the sliding window of the rate limiter no 429 reponses were received.
+
 ---
 
 ## Rate Limiting (5 req/sec per IP)
 
-A **rate limiter** was implemented using a dictionary mapping each client IP to its recent request timestamps.  
-When the number of requests within the past second exceeded the limit, the server responded with **HTTP 429 Too Many Requests**.
+A sliding window rate limiter was implemented using a dictionary that maps each client IP to its recent request timestamps.
 
-```python
-if len(requests[ip]) > 5:
-    send_429_response()
-```
+The system continuously maintains a one-second sliding window — discarding timestamps older than one second — to ensure a fair and accurate limit.
+
+
+<img src="content/rate_limit.png" alt="Requests showing rate limiting in action" />
+
+If the number of requests within the current window exceeds the threshold, the server responds with HTTP 429 Too Many Requests.
+
+---
+
+## Trying to DDoS my friend
+
+In continuity, I also tried to spam my friend's (Adrian Vremere) server using my requester by sending 2000 requests to him.
+
+
+<img src="content/friend_ddos.png" alt="Trying to ddos my friend" />
+
+
+All that's to be said is that his http webserver was still usable, as the rate-limiter only flagged my requester rather than any other request with a different IP, such as the one given to my phone.
 
 ---
 
 ## Conclusions
 
-- **Concurrency (PLT definition)** was achieved — the server was restructured into independent parts that could handle requests without sequential dependency.
+- **Concurrency** was achieved — the server was restructured into independent parts that could handle requests without sequential dependency.
 - **Race conditions** were observed and fixed using synchronization primitives.
-- **Rate limiting** improved robustness against flooding.
-- Overall, the concurrent version handled everything way better than before :'3
+- **Rate limiting** - improved robustness against potential DDoS attacks.
+- About programs: **Concurrency is a property; Parallelism is a behavior**.
 
 ---
 
