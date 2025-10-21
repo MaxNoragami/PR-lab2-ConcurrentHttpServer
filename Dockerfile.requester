@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 WORKDIR /app
 
-COPY client.py .
+COPY requester.py .
 
 RUN useradd -m labuser && chown -R labuser:labuser /app
 USER labuser

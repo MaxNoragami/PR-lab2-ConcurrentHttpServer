@@ -15,6 +15,6 @@ venv/
 *.env
 README.md
 Dockerfile.server
-Dockerfile.client
+Dockerfile.requester
 docker-compose.yml
 .dockerignore

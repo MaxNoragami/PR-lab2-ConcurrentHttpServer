@@ -5,13 +5,40 @@ import time
 import urllib.parse
 import argparse
 import threading
+from collections import defaultdict
 
 ADDRESS = "0.0.0.0"
 PORT = 1337
 VALID_EXTENSIONS = ["png", "pdf", "html"]
 
-HITS = {}
+HITS = defaultdict(int)
 HITS_LOCK = threading.Lock()
+
+CLIENT_REQUESTS = {}
+CLIENT_REQUESTS_LOCK = threading.Lock()
+
+RATE_LIMIT_REQUESTS = 5
+RATE_LIMIT_WINDOW = 1.0
+
+
+def is_rate_limited(client_ip):
+    current_time = time.time()
+
+    with CLIENT_REQUESTS_LOCK:
+        if client_ip not in CLIENT_REQUESTS:
+            CLIENT_REQUESTS[client_ip] = []
+
+        timestamps = CLIENT_REQUESTS[client_ip]
+
+        cutoff_time = current_time - RATE_LIMIT_WINDOW
+        timestamps[:] = [ts for ts in timestamps if ts > cutoff_time]
+
+        if len(timestamps) >= RATE_LIMIT_REQUESTS:
+            timestamps.append(current_time)
+            return True
+
+        timestamps.append(current_time)
+        return False
 
 
 def get_skeleton_view():
@@ -76,6 +103,36 @@ ZZZzz /,`.-'`'    -.  ;-;;,_
     """
 
 
+def get_rate_limit_view(client_ip):
+    return fr"""
+    <!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.jade.min.css">
+    <link rel="icon" type="image/x-icon" href="https://files.catbox.moe/6u1gw2.ico">
+    <title>=(^.^)= 429 Too Many Requests</title></head>
+<body>
+    <main class="container">
+        <h1 style="text-align: center;">429 Too Many Requests</h1>
+        <div style="display: flex; justify-content: center;">
+        <pre style="background: none;">
+      |\      _,,,---,,_
+ZZZzz /,`.-'`'    -.  ;-;;,_
+     |,4-  ) )-,_. ,\ (  `'-'
+    '---''(_/--'  `-'\_)</pre>
+        </div>
+        <p style="text-align: center;">
+            IP: {client_ip}<br>
+            Rate limit: {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} second(s)<br>
+            Please slow down your requests~
+        </p>
+    </main>
+</body>
+</html>
+    """
+
+
 def respond(client, status, head, body):
     if isinstance(body, str):
         body_bytes = body.encode()
@@ -106,6 +163,13 @@ def respond_404(client):
                    "404 Not Found",
                    {"Content-Type": "text/html", "Connection": "close"},
                    get_error_view("404 Not Found"))
+
+
+def respond_429(client, client_ip):
+    return respond(client,
+                   "429 Too Many Requests",
+                   {"Content-Type": "text/html", "Connection": "close"},
+                   get_rate_limit_view(client_ip))
 
 
 def respond_301(client, location):
@@ -170,21 +234,34 @@ def normalize_path(path):
 
 def increment_hits(path):
     with HITS_LOCK:
-        current_hits = HITS.get(path, 0)
-        time.sleep(0.1)
-        HITS[path] = current_hits + 1
+        HITS[path] += 1
 
 
 def handle_client_req(client, addr, root):
     try:
+        client_ip = addr[0]
+
+        # First, receive the request
         client_request = client.recv(4096).decode(errors='ignore')
 
-        time.sleep(1)
+        if not client_request:
+            return
 
-        method, path, protocol = client_request.split("\r\n")[0].split(" ")
-        path = urllib.parse.unquote(path)
+        # Parse the request
+        try:
+            method, path, protocol = client_request.split("\r\n")[0].split(" ")
+            path = urllib.parse.unquote(path)
+        except (ValueError, IndexError):
+            respond_400(client)
+            return
 
         if path == "/favicon.ico":
+            return
+
+        # Check rate limit AFTER receiving the request
+        if is_rate_limited(client_ip):
+            print(f"Rate limit exceeded for {client_ip}")
+            respond_429(client, client_ip)
             return
 
         print(f"Request: {method} {path} {protocol} from {addr}")
@@ -204,8 +281,6 @@ def handle_client_req(client, addr, root):
             respond_404(client)
             return
 
-        increment_hits(path)
-
         if os.path.isdir(actual_path):
             content_type = "text/html"
             data = display_dir(actual_path, path)
@@ -223,10 +298,10 @@ def handle_client_req(client, addr, root):
                 {"Content-Type": content_type, "Connection": "close"},
                 data)
 
+        increment_hits(path)
+
     except (ConnectionResetError, socket.error) as e:
         print(f"Error receiving request: {e}")
-    except ValueError:
-        respond_400(client)
     finally:
         client.close()
 
@@ -234,8 +309,9 @@ def handle_client_req(client, addr, root):
 def start_server(root):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((ADDRESS, PORT))
-    server.listen(10)
+    server.listen(100)
     print(f"Server listening on port {PORT} :3")
+    print(f"Rate limiting: {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW}s")
 
     try:
         while True:

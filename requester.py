@@ -1,147 +1,138 @@
 import argparse
-import threading
+import sys
 import time
-import urllib.request
 import urllib.error
-
-def normalize_path(path):
-    segments = [seg for seg in path.split('/') if seg]
-
-    normalized_segments = []
-    for segment in segments:
-        if len(segment) >= 3 and segment == '.' * len(segment):
-            continue
-        normalized_segments.append(segment)
-
-    return '/' + '/'.join(normalized_segments)
+import urllib.request
+import threading
+import socket
+from typing import Dict, Any, List
 
 
-def http_request(url, request_id, results, lock):
-    start_time = time.time()
+def http_request(idx: int, url: str, timeout: float, results: List[Dict[str, Any]],
+               results_lock: threading.Lock, quiet: bool) -> None:
+    start = time.perf_counter()
+    status = None
+    size = 0
+    error = None
+    success = False
+
     try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            _ = response.read()
-            duration = time.time() - start_time
-            status = response.status
-            result = (request_id, duration, True, f"HTTP {status}")
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            data = resp.read()
+            size = len(data) if data is not None else 0
+            success = 200 <= (status or 0) < 400
     except urllib.error.HTTPError as e:
-        duration = time.time() - start_time
-        result = (request_id, duration, False, f"HTTP {e.code}")
+        status = e.code
+        error = f"HTTPError: {e.code} {e.reason}"
     except urllib.error.URLError as e:
-        duration = time.time() - start_time
-        result = (request_id, duration, False, f"URL Error: {e.reason}")
+        error = f"URLError: {e.reason}"
     except Exception as e:
-        duration = time.time() - start_time
-        result = (request_id, duration, False, f"Error: {str(e)}")
+        error = f"Error: {e}"
+    finally:
+        elapsed = time.perf_counter() - start
 
-    with lock:
+    result = {
+        "index": idx,
+        "success": success,
+        "status": status,
+        "elapsed": elapsed,
+        "bytes": size,
+        "error": error,
+    }
+
+    with results_lock:
         results.append(result)
+        if not quiet:
+            status_str = f"[{result['status']}]" if result['status'] else "[FAIL]"
+            if result["success"]:
+                print(f"~ {idx:3d}  {status_str:<6} {result['elapsed'] * 1000:8.2f} ms     {result['bytes']:5d} B")
+            else:
+                print(
+                    f"~ {idx:3d}  {status_str:<6} {result['elapsed'] * 1000:8.2f} ms     ERROR: {result['error'] or 'Unknown'}")
 
 
-def init_run_threads(url, num_requests, results, sync_lock):
+def init_run(url: str, requests: int, timeout: float, quiet: bool, delay: float = 0.0) -> Dict[str, Any]:
+    results: List[Dict[str, Any]] = []
+    results_lock = threading.Lock()
     threads = []
+    total_start = time.perf_counter()
 
-    start_time = time.time()
-
-    for i in range(1, num_requests + 1):
+    for i in range(1, requests + 1):
         thread = threading.Thread(
             target=http_request,
-            args=(url, i, results, sync_lock),
+            args=(i, url, timeout, results, results_lock, quiet),
             daemon=True
         )
-        threads.append(thread)
         thread.start()
+        threads.append(thread)
+        if delay > 0 and i < requests:
+            time.sleep(delay)
 
-    return threads, start_time
-
-
-def wait_for_all_threads(threads, start_time):
     for thread in threads:
         thread.join()
 
-    return time.time() - start_time
+    total_elapsed = time.perf_counter() - total_start
+    return {"results": results, "total_elapsed": total_elapsed}
 
 
-def calculate_statistics(results, duration, num_requests):
-    successful_requests = [r for r in results if r[2]]
-    failed_requests = [r for r in results if not r[2]]
-
-    requests_per_second = len(successful_requests) / duration if duration > 0 else 0
-
-    return {
-        'successful': successful_requests,
-        'failed': failed_requests,
-        'requests_per_second': requests_per_second,
-        'overall_duration': duration,
-        'num_requests': num_requests
-    }
-
-
-def print_results_summary(stats):
-    print(f"\nSTATISTICS:")
-    print(f"Taken:              {stats['overall_duration']:.3f}s")
-    print(f"Reqs:               {stats['num_requests']}")
-    print(f"Successful reqs:    {len(stats['successful'])}")
-    print(f"Failed reqs:        {len(stats['failed'])}")
-    print(f"Success rate:       {len(stats['successful']) / stats['num_requests'] * 100:.1f}%")
-    print(f"Overall:            {stats['requests_per_second']:.2f}reqs/s")
-
-
-def print_failed_requests(failed_requests):
-    if failed_requests:
-        print(f"\nFAILED REQUESTS:")
-        for req_id, duration, success, status in failed_requests:
-            print(f"  Request {req_id}: {status} ({duration:.3f}s)")
-
-
-def exec_concurrent_test(url, num_requests):
-    print(f"\nTesting: {url}")
-    print(f"Requests: {num_requests}")
-    print("~" * 69)
-
-    results = []
-    sync_lock = threading.Lock()
-
-    threads, start_time = init_run_threads(url, num_requests, results, sync_lock)
-
-    duration = wait_for_all_threads(threads, start_time)
-
-    stats = calculate_statistics(results, duration, num_requests)
-
-    print_results_summary(stats)
-    print_failed_requests(stats['failed'])
-
-    print("~" * 69)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Concurrent HTTP Request Tester")
-    parser.add_argument("-u", "--url", default="/",
-                        help="URL path to request (default: /)")
-    parser.add_argument("-r", "--requests", type=int, default=10,
-                        help="Number of concurrent requests (default: 10)")
-    parser.add_argument("-H", "--host", default="localhost",
-                        help="Server host (default: localhost)")
-    parser.add_argument("-p", "--port", type=int, default=1337,
-                        help="Server port (default: 1337)")
-
-    args = parser.parse_args()
-
-    if args.requests < 1:
-        print("\nError: Number of requests must be positive")
-        return
-
-    normalized_path = normalize_path(args.url)
-
-    full_url = f"http://{args.host}:{args.port}{normalized_path}"
+def stats(results: List[Dict[str, Any]], total_elapsed: float, url: str) -> None:
+    successes = sum(1 for r in results if r["success"])
+    throughput = successes / total_elapsed if total_elapsed > 0 else float("inf")
 
     try:
-        exec_concurrent_test(full_url, args.requests)
-    except KeyboardInterrupt:
-        print("\nKeyboard interrupt received, stopping test...")
-    except Exception as e:
-        print(f"\nErrors occurred during the test: {e}")
+        requester_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        requester_ip = "unknown"
+
+    print("\n" + "~" * 97)
+    print("STATS:")
+    print("~" * 97)
+    print(f"Server:           {url}")
+    print(f"Requester:        {requester_ip}")
+    print(f"Successful:       {successes}/{len(results)}")
+    print(f"Total time:       {total_elapsed:.3f} s")
+    print(f"Throughput:       {throughput:.2f} req/s")
+    print("~" * 97)
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Concurrent HTTP load client")
+    parser.add_argument("-H", "--host", required=True)
+    parser.add_argument("-p", "--port", type=int, required=True)
+    parser.add_argument("-u", "--url", required=True)
+    parser.add_argument("-r", "--requests", type=int, required=True)
+    parser.add_argument("-t", "--time", type=float, default=0.0)
+    return parser.parse_args(argv)
+
+
+def main(argv: List[str]) -> int:
+    args = parse_args(argv)
+
+    if args.requests <= 0:
+        print("Error: requests must be > 0", file=sys.stderr)
+        return 2
+
+    url = f"http://{args.host}:{args.port}{args.url}"
+
+    if args.time > 0 and args.requests > 1:
+        delay = args.time / (args.requests - 1)
+    else:
+        delay = 0.0
+
+    timeout = 10.0
+    quiet = False
+
+    print("\n" + "~" * 97)
+    print(f"Requests:     {args.requests:<5}")
+    print(f"Duration:     {args.time:.1f}s")
+    print(f"Delay: {delay:.3f}s\n")
+
+    run_result = init_run(url, args.requests, timeout, quiet, delay)
+    stats(run_result["results"], run_result["total_elapsed"], url)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv[1:]))

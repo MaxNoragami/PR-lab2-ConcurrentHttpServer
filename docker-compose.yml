@@ -9,10 +9,10 @@ services:
       - "./content:/app/content:ro"
     command: ["python", "server.py", "-d", "/app/content"]
 
-  client:
+  requester:
     build:
         context: .
-        dockerfile: Dockerfile.client
+        dockerfile: Dockerfile.requester
     volumes:
       - "./content/downloads:/app/content/downloads"
     command: ["tail", "-f", "/dev/null"]
